@@ -50,7 +50,7 @@ class Mock(object):
     def __getitem__(self, v):
         return Mock()
 
-MOCK_MODULES = ['numpy', 'matplotlib', 'tensorflow']
+MOCK_MODULES = ['numpy', 'matplotlib', 'tensorflow', 'scipy', 'skin']
 for mod_name in MOCK_MODULES:
     sys.modules[mod_name] = Mock()
 
