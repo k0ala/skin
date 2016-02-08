@@ -1,0 +1,129 @@
+{
+    "pigmented": {
+        "novices": [
+            {
+                "name": "Andre Esteva", 
+                "specificity": 0.78, 
+                "sensitivity": 0.74, 
+                "num_benign": 50, 
+                "num_malignant": 50
+            }, 
+            {
+                "name": "Brett Kuprel", 
+                "specificity": 0.84, 
+                "sensitivity": 0.78, 
+                "num_benign": 50, 
+                "num_malignant": 50
+            }
+        ], 
+        "derms": [
+            {
+                "name": "Rob Novoa", 
+                "specificity": 0.66, 
+                "sensitivity": 0.92, 
+                "num_benign": 50, 
+                "num_malignant": 50
+            }, 
+            {
+                "name": "Susan Swetter", 
+                "specificity": 0.76, 
+                "sensitivity": 0.9, 
+                "num_benign": 50, 
+                "num_malignant": 50
+            }, 
+            {
+                "name": "Justin Ko", 
+                "specificity": 0.74, 
+                "sensitivity": 0.9, 
+                "num_benign": 50, 
+                "num_malignant": 50
+            }, 
+            {
+                "name": "Kerri Rieger", 
+                "specificity": 0.62, 
+                "sensitivity": 0.86, 
+                "num_benign": 50, 
+                "num_malignant": 50
+            }, 
+            {
+                "name": "Kavita Sarin", 
+                "specificity": 0.7, 
+                "sensitivity": 0.86, 
+                "num_benign": 50, 
+                "num_malignant": 50
+            }
+        ], 
+        "melafind": [
+            {
+                "name": "MelaFind", 
+                "specificity": 0.008, 
+                "sensitivity": 1, 
+                "num_benign": null, 
+                "num_malignant": null
+            }, 
+            {
+                "name": "MelaFind", 
+                "specificity": 0.013, 
+                "sensitivity": 0.994, 
+                "num_benign": null, 
+                "num_malignant": null
+            }, 
+            {
+                "name": "MelaFind", 
+                "specificity": 0.036, 
+                "sensitivity": 0.989, 
+                "num_benign": null, 
+                "num_malignant": null
+            }, 
+            {
+                "name": "MelaFind", 
+                "specificity": 0.108, 
+                "sensitivity": 0.983, 
+                "num_benign": null, 
+                "num_malignant": null
+            }, 
+            {
+                "name": "MelaFind", 
+                "specificity": 0.298, 
+                "sensitivity": 0.931, 
+                "num_benign": null, 
+                "num_malignant": null
+            }, 
+            {
+                "name": "MelaFind", 
+                "specificity": 0.6, 
+                "sensitivity": 0.754, 
+                "num_benign": null, 
+                "num_malignant": null
+            }, 
+            {
+                "name": "MelaFind", 
+                "specificity": 0.818, 
+                "sensitivity": 0.543, 
+                "num_benign": null, 
+                "num_malignant": null
+            }, 
+            {
+                "name": "MelaFind", 
+                "specificity": 0.914, 
+                "sensitivity": 0.309, 
+                "num_benign": null, 
+                "num_malignant": null
+            }, 
+            {
+                "name": "MelaFind", 
+                "specificity": 0.961, 
+                "sensitivity": 0.154, 
+                "num_benign": null, 
+                "num_malignant": null
+            }, 
+            {
+                "name": "MelaFind", 
+                "specificity": 0.988, 
+                "sensitivity": 0.074, 
+                "num_benign": null, 
+                "num_malignant": null
+            }
+        ]
+    }
+}
