@@ -17,7 +17,6 @@ import os
 from recommonmark.parser import CommonMarkParser
 import sys
 sys.path.append('../')
-sys.path.append('../../')
 
 source_parsers = {
     '.md': CommonMarkParser,

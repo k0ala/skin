@@ -1,1 +1,1 @@
-from skin.python import *
+from python import *
