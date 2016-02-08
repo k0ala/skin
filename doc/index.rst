@@ -8,27 +8,27 @@ Contents:
 
 Data
 ==================
-.. automodule:: skin.python.data
+.. automodule:: python.data
     :members:
 
 Inference
 ==================
-.. automodule:: skin.python.inference
+.. automodule:: python.inference
     :members:
 
 Train
 ==================
-.. automodule:: skin.python.train
+.. automodule:: python.train
     :members:
 
 Test
 ==================
-.. automodule:: skin.python.test
+.. automodule:: python.test
     :members:
 
 Analysis
 ==================
-.. automodule:: skin.python.analysis
+.. automodule:: python.analysis
     :members:
 
 
