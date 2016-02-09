@@ -86,6 +86,7 @@ def test(net_name, data, gpu_fraction=0.5):
     features = skin.inference.get_features(
         images = images,
         base_net = hypes['base_net'],
+        batch_normalize = hypes['batch_normalize'],
         sess_config = config
     )
 

@@ -34,7 +34,6 @@ def get_inputs(filenames, labels, batch_size, base_net, distort=True,
 
         filenames, labels = tf.train.slice_input_producer(
             tensor_list = [filenames, labels],
-            shuffle = shuffle,
             capacity = batch_size*(num_threads+2)
         )
 
@@ -155,13 +154,14 @@ def get_loss(logits, labels, loss_matrix=None):
     return loss
 
 
-def _get_features_v1(images, graph, sess_config):
+def _get_features_v1(images, graph, batch_normalize, sess_config):
     """Compute features for inception_v1 net
 
     Args:
         images (tensorflow.Tensor): 4D array of image batch,
             batch_size by image dimensions
         graph (tensorflow.Graph): Graph with imagenet trained parameters
+        batch_normalize (bool): Whether to use batch normalization
         sess_config (tensorflow.ConfigProto): Session configuration,
             mostly for maintaining control over GPU memory usage
 
@@ -199,10 +199,15 @@ def _get_features_v1(images, graph, sess_config):
         for name, value in weights_orig.iteritems()
     }
 
+    if batch_normalize:
+        name_suffix = '_pre_relu/batchnorm/beta'
+    else:
+        name_suffix = '_pre_relu/bias'
+
     T.update({
         name: tf.Variable(
             initial_value = value, 
-            name = name[:-2] + '_pre_relu/batchnorm/beta'
+            name = name[:-2] + name_suffix
         )
         for name, value in bias_orig.iteritems()
     })
@@ -211,7 +216,7 @@ def _get_features_v1(images, graph, sess_config):
 
     for op in reuse_ops:
 
-        if op.type == 'BiasAdd':
+        if batch_normalize and op.type == 'BiasAdd':
 
             t, beta = [T[i.op.name] for i in op.inputs]
 
@@ -357,13 +362,14 @@ def _get_features_v3(images, graph, sess_config):
     return features
 
 
-def get_features(images, base_net, sess_config):
+def get_features(images, base_net, batch_normalize, sess_config):
     """Compute features
 
     Args:
         images (tensorflow.Tensor): 4D array of image batch,
             batch_size by image dimensions
-        base_net (string): Net to finetune, either inception_v1 or inception_v3 
+        base_net (string): Net to finetune, either inception_v1 or inception_v3
+        batch_normalize (bool): Whether to use batch normalization
         sess_config (tensorflow.ConfigProto): Session configuration,
             mostly for maintaining control over GPU memory usage
 
@@ -380,7 +386,7 @@ def get_features(images, base_net, sess_config):
     with graph.as_default(): tf.import_graph_def(graph_def, name='')
 
     if base_net == 'inception_v1':
-        features = _get_features_v1(images, graph, sess_config)
+        features = _get_features_v1(images, graph, batch_normalize, sess_config)
 
     if base_net == 'inception_v3':
         features = _get_features_v3(images, graph, sess_config)

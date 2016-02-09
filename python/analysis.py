@@ -165,12 +165,12 @@ def make_plots(net_name, step, phase, confidence_interval=0.8):
         p = np.exp(Z[IJ][:,[i,j]])
         p = p[:,1]/p.sum(axis=1)
 
-        hist_fig = get_hist(p, y)
+        hist_fig = _get_hist(p, y)
         hist_path = os.path.join(save_path, category, 'hist')
         if not os.path.exists(hist_path): os.makedirs(hist_path)
         hist_fig.savefig(hist_path + '/step{}.svg'.format(step))
 
-        roc_fig = get_roc(p, y, competition_data[category], confidence_interval)
+        roc_fig = _get_roc(p, y, competition_data[category], confidence_interval)
         roc_path = os.path.join(save_path, category, 'roc')
         if not os.path.exists(roc_path): os.makedirs(roc_path)
         roc_fig.savefig(roc_path + '/step{}.svg'.format(step))
