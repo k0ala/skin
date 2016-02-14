@@ -5,7 +5,7 @@ Summary of available functions:
     - Repeat data samples to get even distribution over classes
     - Add images from auxillary class to dataset
     - Discard fraction of data from each class
-    - Add mice images to pigmented malignant class
+    - Add mice melanoma images to pigmented malignant class
     - Load the skin dataset
 
 """
@@ -85,7 +85,7 @@ def _add_aux_class(XY, aux_class_path):
 
 
 def _add_mice(XY, p, meta, m2x):
-    """Add mice images to pigmented malignant class
+    """Add mice melanoma images to pigmented malignant class
 
     Args:
         XY (numpy.array): 2D array of data
