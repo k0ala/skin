@@ -5,7 +5,7 @@ Summary of available functions:
     - Repeat data samples to get even distribution over classes
     - Add images from auxillary class to dataset
     - Discard fraction of data from each class
-    - Add mice melanoma images to pigmented malignant class
+    - Add mice images to pigmented malignant class
     - Load the skin dataset
 
 """
@@ -85,7 +85,7 @@ def _add_aux_class(XY, aux_class_path):
 
 
 def _add_mice(XY, p, meta, m2x):
-    """Add mice melanoma images to pigmented malignant class
+    """Add mice images to pigmented malignant class
 
     Args:
         XY (numpy.array): 2D array of data
@@ -109,7 +109,8 @@ def _add_mice(XY, p, meta, m2x):
 
 def load_data(data_path, phase = 'train',
     tax_score = 0.8, skin_prob = 0.4, evenly_distribute = False, 
-    data_fraction = None, aux_class_paths = None, mice_fraction = None):
+    data_fraction = None, aux_class_paths = None, mice_fraction = None,
+    split = 'dt'):
 
     """Load the skin dataset
 
@@ -135,7 +136,9 @@ def load_data(data_path, phase = 'train',
              ('images/img2.jpg', 'inflammatory')]
     """
 
-    meta = json.load(open(os.path.join(data_path, 'meta_{}.json'.format(phase))))
+    meta_file = 'meta_{}_{}.json'.format(split, phase)
+
+    meta = json.load(open(os.path.join(data_path, meta_file)))
 
     M = [
         m for m in meta

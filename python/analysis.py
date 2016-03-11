@@ -12,12 +12,13 @@ import os
 import numpy as np
 import json
 from scipy import stats
+import matplotlib; matplotlib.use('Agg')
 from matplotlib import pyplot, rcParams, patches
 
 rcParams.update({'figure.autolayout': True})
 
 
-def _get_hist(p, y):
+def get_hist(p, y):
     """Create histogram of benign and malignant probabilities
 
     Args:
@@ -42,7 +43,7 @@ def _get_hist(p, y):
     return fig
 
 
-def _get_roc(p, y, data=None, confidence_interval=None):
+def get_roc(p, y, data=None, confidence_interval=None):
     """Create sensitiviy/specificity curve
 
     Args:
@@ -165,12 +166,12 @@ def make_plots(net_name, step, phase, confidence_interval=0.8):
         p = np.exp(Z[IJ][:,[i,j]])
         p = p[:,1]/p.sum(axis=1)
 
-        hist_fig = _get_hist(p, y)
+        hist_fig = get_hist(p, y)
         hist_path = os.path.join(save_path, category, 'hist')
         if not os.path.exists(hist_path): os.makedirs(hist_path)
         hist_fig.savefig(hist_path + '/step{}.svg'.format(step))
 
-        roc_fig = _get_roc(p, y, competition_data[category], confidence_interval)
+        roc_fig = get_roc(p, y, competition_data[category], confidence_interval)
         roc_path = os.path.join(save_path, category, 'roc')
         if not os.path.exists(roc_path): os.makedirs(roc_path)
         roc_fig.savefig(roc_path + '/step{}.svg'.format(step))

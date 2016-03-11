@@ -3,6 +3,5 @@
 
 import skin.python.data
 import skin.python.analysis
-import skin.python.train
 import skin.python.inference
-import skin.python.test
+from skin.python.convnet import ConvNet

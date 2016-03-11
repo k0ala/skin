@@ -10,7 +10,7 @@ FLAGS = tf.app.flags.FLAGS
 
 tf.app.flags.DEFINE_string(
     flag_name = 'net_name', 
-    default_value = '/tmp/brettnet', 
+    default_value = None, 
     docstring = 'Directory of net to evaluate'
 )
 tf.app.flags.DEFINE_integer(
@@ -18,33 +18,23 @@ tf.app.flags.DEFINE_integer(
     default_value = 0, 
     docstring = 'GPU to use'
 )
-tf.app.flags.DEFINE_float(
-    flag_name = 'gpu_fraction', 
-    default_value = 0.5, 
-    docstring = 'Fraction of GPU memory to use'
-)
 
 def main():
 
-    net_name = FLAGS.net_name
+    net = skin.ConvNet(FLAGS.net_name)
 
     data = skin.data.load_data(
         data_path = '../data/',
         phase = 'test',
-        tax_score = 0,
-        skin_prob = 0,
-        evenly_distribute = False
+        tax_score = 0.85,
+        skin_prob = 0.4,
+        evenly_distribute = False,
+        split = net.hypes['split']
     )
 
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(FLAGS.gpu)
-
-    with open(net_name + '/data_test.txt', 'w') as f: 
+    with open(net.name + '/data_test.txt', 'w') as f: 
         json.dump(data, f, indent=4)
 
-    skin.test.test(
-        net_name = net_name,
-        data = data,
-        gpu_fraction = FLAGS.gpu_fraction
-    )
+    net.test(data, gpu=FLAGS.gpu, gpu_fraction=0.8)
 
 if __name__ == '__main__': main()
