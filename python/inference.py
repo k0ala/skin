@@ -12,139 +12,56 @@ Summary of available functions:
 import os
 import numpy as np
 import tensorflow as tf
+from inception import inception_model
 
 
-def get_inputs(filenames, labels, batch_size, base_net, distort=True, 
-    num_threads=6, shuffle=True):
-    """Load image and label batches
-
-    Args:
-        filenames (list): List of filename paths
-        labels (list): List of label integers
-        batch_size (int): Number of images in a batch
-        base_net (string): Net to finetune, either inception_v1 or inception_v3
-        distort (bool): If `True`, randomly flip and crop the image
-        num_threads (int): Number of threads to use for loading image batches
-
-    Returns:
-        images, labels, filenames (tuple): Image, label, and filename batches
-    """
+def build_graph(hypes, filenames, labels, num_classes, subset, batch_size):
 
     with tf.name_scope('inputs'):
 
         filenames, labels = tf.train.slice_input_producer(
             tensor_list = [filenames, labels],
-            capacity = batch_size*(num_threads+2),
-            shuffle = shuffle
+            capacity = batch_size*2,
+            shuffle = (subset=='train')
         )
 
-        images = tf.read_file(filenames)
-        images = tf.image.decode_jpeg(images, channels=3)
+        filenames, labels = tf.train.batch(
+            tensor_list = [filenames, labels],
+            batch_size = batch_size,
+            capacity = batch_size*2,
+        )
 
-        if base_net == 'inception_v1': image_size = 224
-        if base_net == 'inception_v3': image_size = 299
+        images0 = [tf.read_file(i[0]) for i in tf.split(0, batch_size, filenames)]
+        images0 = [tf.image.decode_jpeg(i, channels=3) for i in images0]
 
-        if distort:
-            images = tf.image.resize_images(images, image_size/5*6, image_size/5*6)
-            tf.image_summary('orig_image', tf.expand_dims(images, 0))
-            images = tf.image.random_ops.random_crop(images, [image_size]*2+[3])
-            images = tf.image.random_flip_left_right(images)
-            images = tf.image.random_flip_up_down(images)
-            tf.image_summary('train_image', tf.expand_dims(images, 0))
-        else:
-            images = tf.image.resize_images(images, image_size, image_size)
+        if subset == 'train':
+            images0 = [tf.image.random_flip_left_right(i) for i in images0]
+            images0 = [tf.image.random_flip_up_down(i) for i in images0]
 
-        if base_net == 'inception_v1':
-            images -= 117
+        images = tf.pack([
+            tf.image.resize_images(i, 299, 299) 
+            for i in images0
+        ])
 
-        if base_net == 'inception_v3':
-            images -= 128
-            images /= 128
+        if hypes['spatial_transformer']:
+            with tf.variable_scope('spatial_transform'):
+                images = spatial_tranform(images, images0, batch_size, subset,
+                    hypes['loc_net'], hypes['xform_reg'])
 
-        if shuffle:
-            images, labels, filenames = tf.train.shuffle_batch(
-                tensor_list = [images, labels, filenames],
-                batch_size = batch_size,
-                num_threads = num_threads,
-                capacity = batch_size*(num_threads+2),
-                min_after_dequeue = batch_size
-            )
-        else:
-            images, labels, filenames = tf.train.batch(
-                tensor_list = [images, labels, filenames],
-                batch_size = batch_size,
-                num_threads = num_threads,
-                capacity = batch_size*(num_threads+2),
-            )
+        with tf.name_scope(None):
+            images = tf.identity(images, name='input')
 
-    return images, labels, filenames
-
-
-def get_logits(features, num_classes):
-    """Compute logits
-
-    Args:
-        features (tensorflow.Tensor): 2D array of features,
-            batch size by features dimension
-        num_classes (int): Number of classes
-
-    Returns:
-        logits (tensorflow.Tensor): 2D array of logits, 
-        batch size by number of classes
-    """
-
-    features_dim = features.get_shape().as_list()[-1]
-
-    w = tf.Variable(
-        initial_value = (
-            tf.random_normal(
-                shape = [features_dim, num_classes],
-                stddev = 1e-4,
-                name = 'weights_init'
-            )
-        ), 
-        name = 'weights',
-        collections = ['variables', 'weights']
+    logits, logits_aux = inception_model.inference(
+        images = (images-128)/128.,
+        num_classes = num_classes,
+        for_training = (subset == 'train'),
+        restore_logits = (subset != 'train')
     )
 
-    b = tf.Variable(
-        initial_value = (
-            tf.random_normal(
-                shape = [num_classes],
-                stddev = 1e-4,
-                name = 'bias_init'
-            )
-        ), 
-        name='biases',
-        collections = ['variables', 'weights']
-    ) 
+    with tf.name_scope(None): logits = tf.identity(logits, name='logits')
+    tf.histogram_summary('logits', logits)
 
-    logits = tf.nn.xw_plus_b(features, w, b, name='logits')
-
-    return logits
-
-
-def get_loss(logits, labels, loss_matrix=None):
-    """Compute loss
-
-    Args:
-        logits (tensorflow.Tensor): 2D array of logits, 
-            batch size by number of classes
-        labels (tensorflow.Tensor): 1D array of label integers
-        loss_matrix (list): 2D array loss matrix (experimental)
-
-    Returns:
-        loss (tensorflow.Tensor): 0D array (scalar) average loss over batch
-    """
-
-    if loss_matrix:
-
-        loss_matrix = np.array(loss_matrix, dtype='float32')
-        loss_weights = tf.nn.embedding_lookup(loss_matrix, labels)
-        loss = -tf.log(tf.nn.softmax(logits)+1e-8)
-        loss = tf.reduce_sum(loss*loss_weights, axis=1)
-
-    else:
+    with tf.name_scope('loss'):
 
         batch_size, num_classes = logits.get_shape().as_list()
 
@@ -157,363 +74,206 @@ def get_loss(logits, labels, loss_matrix=None):
         )
 
         loss = tf.nn.softmax_cross_entropy_with_logits(logits, labels_sparse)
+        loss = tf.reduce_mean(loss, name='loss')
 
-    loss = tf.reduce_mean(loss, name='loss')
+        loss_aux = tf.nn.softmax_cross_entropy_with_logits(logits_aux, labels_sparse)
+        loss_aux = tf.reduce_mean(loss_aux, name='loss_aux')
 
-    return loss
+        loss = 0.7*loss + 0.3*loss_aux
 
-
-def normalize_batch(batch, phase, beta=None, gamma=None):
-
-    d = batch.get_shape().as_list()[-1]
-    r = len(batch.get_shape())
-        
-    if beta is None:
-        beta = tf.Variable(tf.zeros([d]), name='beta')
-    if gamma is None:
-        gamma = tf.Variable(tf.ones([d]), name='gamma')
-
-    mu, var = tf.nn.moments(batch, axes=range(r-1))
-
-    if phase == 'test':
-        mu_name = mu.op.name + '/ExponentialMovingAverage'
-        var_name = var.op.name + '/ExponentialMovingAverage'
-        del mu, var
-        mu, var = tf.zeros([d]), tf.ones([d])
-        with tf.name_scope(''):
-            mu = tf.Variable(mu, name=mu_name)
-            var = tf.Variable(var, name=var_name)
-
-    if phase == 'train':
-        tf.add_to_collection('batch_moments', mu)
-        tf.add_to_collection('batch_moments', var)
-            
-    if r is 4: 
-        batch = tf.nn.batch_norm_with_global_normalization(
-            t=batch, m=mu, v=var, beta=beta, gamma=gamma, 
-            variance_epsilon=1e-4, scale_after_normalization=True)
-    elif r is 2: 
-        batch -= mu
-        batch *= tf.rsqrt(var+1e-4)
-        batch *= gamma
-        batch += beta
-
-    return batch
-
-
-def _apply_op(op, tensors):
-
-    op = tf.get_default_graph().create_op(
-        op_type = op.type, 
-        inputs = [tf.convert_to_tensor(tensors[i.op.name]) for i in op.inputs],
-        dtypes = [i.dtype for i in op.outputs], 
-        name = op.name, 
-        attrs =  op.node_def.attr
-    )
-
-    return op.outputs[0]
-
-
-def _get_features_v1(images, graph, phase, batch_normalize):
-    """Compute features for inception_v1 net
-
-    Args:
-        images (tensorflow.Tensor): 4D array of image batch,
-            batch_size by image dimensions
-        graph (tensorflow.Graph): Graph with imagenet trained parameters
-        batch_normalize (bool): Whether to use batch normalization
-
-    Returns:
-        features (tensorflow.Tensor): 2D array of features,
-        batch size by features dimension
-    """
-
-    input_op = graph.get_operation_by_name('input')
-
-    ops = [
-        op for op in graph.get_operations() 
-        if 'softmax' not in op.name and 'output' not in op.name
-    ]
-    weights_orig = [op for op in ops if op.name[-2:] == '_w']
-    bias_orig = [op for op in ops if op.name[-2:] == '_b']
-    reuse_ops = [
-        op for op in ops if op not in weights_orig + bias_orig + [input_op]
-    ]
-
-    config = tf.GPUOptions(per_process_gpu_memory_fraction=0.8)
-    config = tf.ConfigProto(gpu_options=config)
-    with tf.Session(graph=graph, config=config) as sess:
-        weights_orig = {op.name: op.outputs[0].eval() for op in weights_orig}
-        bias_orig = {op.name: op.outputs[0].eval() for op in bias_orig}
-
-    tensors_new = {
-        name: tf.Variable(
-            initial_value = value,
-            name = name[:-2] + '_pre_relu/weights',
-            collections = ['variables', 'weights']
-        )
-        for name, value in weights_orig.iteritems()
-    }
-
-    suffix = '_pre_relu/' + ['bias', 'batchnorm/beta'][batch_normalize]
-    
-    tensors_new.update({
-        name: tf.Variable(value, name=name[:-2]+suffix)
-        for name, value in bias_orig.iteritems()
-    })
-
-    tensors_new[input_op.name] = images
-
-    for op in reuse_ops:
-
-        if batch_normalize and op.type == 'BiasAdd':
-            batch, bias = [tensors_new[i.op.name] for i in op.inputs]
-            with tf.name_scope(op.name + '/batchnorm/'):
-                batch = normalize_batch(batch, phase, beta=bias)
-            tensors_new[op.name] = tf.identity(batch, name=op.name)
-
-        else:
-            tensors_new[op.name] = _apply_op(op, tensors_new)
-
-    features = [tensors_new[i] for i in ['nn0', 'nn1', 'avgpool0/reshape']]
-    features = [tf.identity(i, name='features') for i in features]
-
-    return features
-
-
-def _get_features_v3(images, graph, phase):
-    """Compute features for inception_v3 net
-
-    Args:
-        images (tensorflow.Tensor): 4D array of image batch,
-            batch_size by image dimensions
-        graph (tensorflow.Graph): Graph with imagenet trained parameters
-
-    Returns:
-        features (tensorflow.Tensor): 2D array of features,
-        batch size by features dimension
-    """
-
-    input_op = graph.get_operation_by_name('Mul')
-    features_op = graph.get_operation_by_name('pool_3')
-
-    ops = graph.get_operations()
-
-    weights_ops = [op for op in ops if 'params' in op.name]
-    bias_orig = [op for op in ops if 'beta' in op.name or 'gamma' in op.name]
-
-    reuse_ops = graph.get_operations()
-    i_input = reuse_ops.index(input_op)
-    i_features = reuse_ops.index(features_op)
-    reuse_ops = reuse_ops[i_input+1:i_features+1]
-    reuse_ops = [
-        op for op in reuse_ops 
-        if op not in weights_ops + bias_orig
-        and 'moving' not in op.name
-    ]
-
-    config = tf.GPUOptions(per_process_gpu_memory_fraction=0.8)
-    config = tf.ConfigProto(gpu_options=config)
-    with tf.Session(graph=graph, config=config) as sess:
-        weights_orig = {op.name: op.outputs[0].eval() for op in weights_ops}
-        bias_orig = {op.name: op.outputs[0].eval() for op in bias_orig}
-
-    tensors_new = {
-        name: tf.Variable(
-            initial_value = value,
-            name = name,
-            collections = ['variables', 'weights']
-        )
-        for name, value in weights_orig.iteritems()
-    }
-
-    tensors_new.update({
-        name: tf.Variable(value, name=name)
-        for name, value in bias_orig.iteritems()
-    })
-
-    tensors_new[input_op.name] = images
-
-    for op in reuse_ops:
-
-        if op.type == 'BatchNormWithGlobalNormalization':
-            batch, beta, gamma = [
-                tensors_new[op.inputs[i].op.name] for i in [0,3,4]
-            ]
-            with tf.name_scope(op.name + '/'):
-                batch = normalize_batch(batch, phase, beta, gamma)
-            tensors_new[op.name] = tf.identity(batch, name=op.name)
-
-        else:
-            tensors_new[op.name] = _apply_op(op, tensors_new)
-
-    features = tf.reshape(tensors_new[features_op.name], [-1, 2048], name='features')
-
-    return features
-
-
-def get_features(images, base_net, phase, batch_normalize):
-    """Compute features
-
-    Args:
-        images (tensorflow.Tensor): 4D array of image batch,
-            batch_size by image dimensions
-        base_net (string): Net to finetune, either inception_v1 or inception_v3
-        batch_normalize (bool): Whether to use batch normalization
-
-    Returns:
-        features (tensorflow.Tensor): 2D array of features,
-        batch size by features dimension
-    """
-
-    graph = tf.Graph()
-
-    graph_def = tf.GraphDef()
-    graph_def_file = os.path.join('../graphs/', base_net+'.pb')
-    with open(graph_def_file) as f: graph_def.ParseFromString(f.read())
-    with graph.as_default(): tf.import_graph_def(graph_def, name='')
-
-    if base_net == 'inception_v1':
-        features = _get_features_v1(images, graph, phase, batch_normalize)
-
-    if base_net == 'inception_v3':
-        features = _get_features_v3(images, graph, phase)
-
-    return features
-
-def build_graph(hypes, filenames, labels, num_classes, phase, batch_size):
-
-    images, labels, filenames = get_inputs(
-        filenames = filenames,
-        labels = labels, 
-        batch_size = batch_size,
-        base_net = hypes['base_net'],
-        num_threads = 1 + 5*(phase=='train'),
-        distort = (phase=='train'),
-        shuffle = (phase=='train')
-    )
-
-    features = get_features(
-        images = images,
-        base_net = hypes['base_net'],
-        phase = phase,
-        batch_normalize = hypes['batch_normalize']
-    )
-
-    if type(features) is list:
-
-        loss = []
-        feats = features[-1]
-
-        for i, features in enumerate(features):
-            
-            tf.histogram_summary(features.op.name, features)
-
-            if hypes['use_dropout'] and phase == 'train':
-                features = tf.nn.dropout(features, 0.5)
-
-            with tf.name_scope('logits_{}'.format(i)):
-                logits = get_logits(
-                    features = features,
-                    num_classes = num_classes
-                )
-
-            with tf.name_scope('loss_{}'.format(i)):
-                loss.append(get_loss(
-                    logits = logits, 
-                    labels = labels,
-                    loss_matrix=hypes['loss_matrix']
-                ))
-
-        with tf.name_scope('loss'):
-            loss = tf.reduce_sum(
-                input_tensor = tf.mul(tf.pack(loss), hypes['head_weights']),
-                name = 'loss'
-            )
-
-    else:
-        
-        feats = features
-        if hypes['use_dropout'] and phase == 'train':
-            features = tf.nn.dropout(features, 0.5)
-
-        with tf.name_scope('logits'):
-            logits = get_logits(
-                features = features,
-                num_classes = num_classes
-            )
-
-        with tf.name_scope('loss'):
-            loss = get_loss(
-                logits = logits, 
-                labels = labels,
-                loss_matrix = hypes['loss_matrix']
-            )
+        tf.scalar_summary('loss', loss)
 
     fetches = {
         'loss': loss,
         'filenames': filenames,
-        'logits': logits,
-        'features': feats
+        'logits': logits
     }
 
-    if phase == 'test':
-        for op in tf.get_default_graph().get_operations():
-            print op.type.ljust(35), '\t', op.name
+    def print_graph_ops():
+        with open('/tmp/graph_ops.txt', 'w') as f:
+            for op in tf.get_default_graph().get_operations():
+                f.write(op.type.ljust(35)+'\t'+op.name+'\n')
 
-    if phase == 'train':
+    if subset == 'train':
 
-        with tf.variable_scope('weights_norm') as scope:
-            weights_norm = tf.reduce_sum(
-                input_tensor = tf.pack(
-                    [tf.nn.l2_loss(i) for i in tf.get_collection('weights')]
-                ),
-                name='weights_norm'
-            )
-        
-        with tf.variable_scope('regularized_loss'):
-            regularized_loss = tf.add(
-                x = loss, 
-                y = hypes['weight_decay']*weights_norm, 
-                name = 'regularized_loss'
-            )
+        reg_loss = tf.add_n(tf.get_collection('regularization_losses'))
+        tf.scalar_summary('reg_loss', reg_loss)
 
-        for op in tf.get_default_graph().get_operations():
-            print op.type.ljust(35), '\t', op.name
+        with tf.variable_scope('reg_loss'):
+            loss += reg_loss
+
+        print_graph_ops()
 
         global_step = tf.Variable(0, name='global_step', trainable=False)
 
-        opt = eval('tf.train.{}Optimizer'.format(hypes['optimizer']))(
+        opt = eval('tf.train.{}Optimizer'.format('Adam'))(
             learning_rate = hypes['learning_rate'], 
-            epsilon = hypes['epsilon']
+            epsilon = hypes['epsilon'],
+            beta1 = hypes['beta1'],
+            beta2 = hypes['beta2']
         )
 
-        grads = opt.compute_gradients(regularized_loss)
-        apply_grads = opt.apply_gradients(
-            grads_and_vars = grads, 
-            global_step = global_step
-        )
+        grads = opt.compute_gradients(loss)
+        apply_grads = opt.apply_gradients(grads, global_step)
 
-        if hypes['batch_normalize']:
-            moving_average = tf.train.ExponentialMovingAverage(0.99)
-            batch_moments = tf.get_collection('batch_moments')
-            with tf.control_dependencies([apply_grads]):
-                move_averages = moving_average.apply(batch_moments)
-                train_op = move_averages
-        else:
-            train_op = apply_grads
+        variable_averages = tf.train.ExponentialMovingAverage(
+            hypes['variable_averages_decay'], global_step)
+        variables_to_average = (tf.trainable_variables() +
+                                tf.moving_average_variables())
+        variables_averages_op = variable_averages.apply(variables_to_average)
 
-        tf.histogram_summary(logits.op.name, logits)
-        tf.scalar_summary(loss.op.name, loss)
-        tf.scalar_summary(weights_norm.op.name, weights_norm)
+        batchnorm_updates_op = tf.group(*tf.get_collection('_update_ops_'))
+
+        train_op = tf.group(apply_grads, variables_averages_op, batchnorm_updates_op)
+
         for grad, var in grads:
             tf.histogram_summary(var.op.name, var)
-            tf.histogram_summary(var.op.name + '/gradients', grad)
+            try:
+                tf.histogram_summary(var.op.name + '/gradients', grad)
+            except:
+                print var.op.name
 
         fetches.update({
-            'weights_norm': weights_norm,
+            'reg_loss': reg_loss, 
             'train_op': train_op,
             'global_step': global_step
         })
 
+    else:
+
+        print_graph_ops()
+
     return fetches
+
+
+def spatial_tranform(images1, images0, batch_size, subset, loc_net, xform_reg):
+    
+    with tf.name_scope(None): 
+        images1 = tf.identity(images1, name='input_stn')
+    
+    if loc_net == 'simple':
+        print 'using simple localization network'
+        theta = simple_loc_net(images1, batch_size)
+    
+    if loc_net == 'inception':
+        print 'using inception localization network'
+        theta, _ = inception_model.inference(
+            images = (images1-128)/128.,
+            num_classes = 3,
+            for_training = (subset == 'train'),
+            restore_logits = (subset != 'train')
+        )
+        theta = tf.nn.tanh(theta)
+    
+    with tf.name_scope(None): 
+        theta = tf.identity(theta, name='theta')     
+    tf.histogram_summary('theta', theta)
+    
+    if subset == 'train':
+        with tf.name_scope(None):
+            theta_loss = tf.nn.l2_loss(theta, name='theta_loss')
+        tf.scalar_summary('theta_loss', theta_loss)
+        tf.add_to_collection('regularization_losses', xform_reg*theta_loss)
+
+    theta = [tf.squeeze(i) for i in tf.split(0, batch_size, theta)]
+    with tf.control_dependencies(images0 + theta):
+        images2 = tf.pack([interp(i, j) for i, j in zip(images0, theta)])
+    
+    blackline = tf.zeros([batch_size, 299, 1, 3])
+    whiteline = 255*tf.ones([batch_size, 299, 1, 3])
+    images12 = tf.concat(2, [images1, whiteline, blackline, whiteline, images2])
+    tf.image_summary('xform_pairs', images12, max_images=batch_size)
+    
+    return images2
+
+
+def simple_loc_net(images, batch_size):
+
+    images -= 128
+    images /= 128
+    
+    with tf.name_scope('conv1') as scope:
+        kernel = tf.Variable(tf.truncated_normal([5,5,3,64], 
+            dtype=tf.float32, stddev=1e-3), name='weights')
+        conv = tf.nn.conv2d(images, kernel, [1,2,2,1], padding='SAME')
+        biases = tf.Variable(tf.constant(0.0, shape=[64], dtype=tf.float32), 
+            trainable=True, name='biases')
+        bias = tf.nn.bias_add(conv, biases)
+        conv1 = tf.nn.relu(bias, name=scope)
+
+    pool1 = tf.nn.max_pool(conv1, ksize=[1,3,3,1], strides=[1,2,2,1],
+                         padding='SAME', name='pool1')
+        
+    with tf.name_scope('conv2') as scope:
+        kernel = tf.Variable(tf.truncated_normal([5,5,64,64], 
+            dtype=tf.float32, stddev=1e-3), name='weights')
+        conv = tf.nn.conv2d(pool1, kernel, [1,2,2,1], padding='SAME')
+        biases = tf.Variable(tf.constant(0.0, shape=[64], dtype=tf.float32), 
+            trainable=True, name='biases')
+        bias = tf.nn.bias_add(conv, biases)
+        conv1 = tf.nn.relu(bias, name=scope)
+    
+    pool2 = tf.nn.max_pool(conv1, ksize=[1,3,3,1], strides=[1,2,2,1],
+                         padding='SAME', name='pool2')
+    
+    dim = np.prod(pool2.get_shape().as_list()[1:])
+    
+    flat = tf.reshape(pool2, [batch_size, dim])
+    
+    with tf.name_scope('fc1') as scope:
+        weights = tf.Variable(tf.truncated_normal([dim, 3], dtype=tf.float32,
+            stddev=1e-3), name='weights')
+        biases = tf.Variable(tf.constant(0.0, shape=[3], dtype=tf.float32), 
+            name='biases')
+        theta = tf.add(tf.matmul(flat, weights), biases, name=scope)
+        theta = tf.nn.tanh(theta)
+    
+    return theta
+
+
+def interp(u, theta):
+
+    u = tf.cast(u, 'float32')
+
+    h, w = tf.shape(u)[0], tf.shape(u)[1]
+    paddings = tf.pack([
+        tf.pack([tf.maximum(h,w)-h/2]*2), 
+        tf.pack([tf.maximum(h,w)-w/2]*2),
+        tf.constant([0,0])
+    ])
+    u = tf.pad(u, paddings)
+    s, c0, c1 = tf.split(0, 3, theta)
+
+    h, w = tf.cast(h, 'float32'), tf.cast(w, 'float32')
+    IJ = tf.maximum(h,w)*((s+1)/4*np.linspace(-1,1,299) + 1)
+    I, J = IJ+c0*h/2, IJ+c1*w/2
+
+    len_kern = IJ[1]-IJ[0]
+
+    I0 = tf.floor(I) - len_kern/2
+    J0 = tf.floor(J) - len_kern/2
+
+    dI = 1./len_kern*tf.expand_dims(I-I0, -1)
+    dJ = 1./len_kern*tf.expand_dims(J-J0, 0)
+
+    I0 = tf.cast(I0, 'int32')
+    J0 = tf.cast(J0, 'int32')
+    len_kern = tf.cast(len_kern, 'int32')
+    I1 = I0 + len_kern
+    J1 = J0 + len_kern
+
+    u0  = tf.transpose(tf.gather(u,  I0), [1,0,2])
+    u1  = tf.transpose(tf.gather(u,  I1), [1,0,2])
+    u00 = tf.transpose(tf.gather(u0, J0), [1,0,2])
+    u01 = tf.transpose(tf.gather(u0, J1), [1,0,2])
+    u10 = tf.transpose(tf.gather(u1, J0), [1,0,2])
+    u11 = tf.transpose(tf.gather(u1, J1), [1,0,2])
+
+    v = u00
+    v += (u10-u00) * tf.expand_dims(dI, -1)
+    v += (u01-u00) * tf.expand_dims(dJ, -1)
+    v += (u00+u11-u01-u10) * tf.expand_dims(tf.matmul(dI, dJ), -1)
+
+    v.set_shape([299, 299, 3])
+    
+    return v
