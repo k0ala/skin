@@ -35,18 +35,18 @@ class DataSet(object):
 
 
     def save(self):
-        
+
         with open(self.path + '/params.txt', 'w') as f:
             json.dump(self.params, f, indent=4)
-        with open(self.path + '/train.txt', 'w') as f: 
+        with open(self.path + '/train.txt', 'w') as f:
             json.dump(self.train, f, indent=4)
-        with open(self.path + '/val.txt', 'w') as f: 
+        with open(self.path + '/val.txt', 'w') as f:
             json.dump(self.val, f, indent=4)
 
 
     def restore(self, subset):
 
-        print 'restoring', self.path
+        print 'restoring dataset', self.path
 
         with open(self.path+'/params.txt') as f: self.params = json.load(f)
 
@@ -79,7 +79,7 @@ class DataSet(object):
 
         labels = sorted({m['label'] for m in meta})
         num_classes = len(labels)
-        
+
         m2x = lambda m: DATA_PATH+'/images/'+m['filename']
         m2y = lambda m: m['label']
 
@@ -90,12 +90,12 @@ class DataSet(object):
             if self.params['aux_class_paths']:
                 XY = self.add_aux_classes(XY)
 
-            if self.params['data_fraction'] != 1: 
+            if self.params['data_fraction'] != 1:
                 XY = self.apply_data_fraction(XY)
 
             if self.params['mice_fraction']:
                 XY = self.add_mice(XY, meta)
-            
+
             if self.params['evenly_distribute']:
                 XY = self.evenly_distribute(XY)
 
@@ -126,7 +126,7 @@ class DataSet(object):
         C = np.array([sum(Y==y) for y in Ys])
         rnd.shuffle(XY)
         XY = np.concatenate([
-            XY[Y==y][:int(c*p)] 
+            XY[Y==y][:int(c*p)]
             for y, c in zip(Ys, C)
         ])
 
@@ -172,7 +172,7 @@ class DataSet(object):
         for aux_class_path in self.params['aux_class_paths']:
 
             aux_images = [
-                os.path.join(aux_class_path, i) 
+                os.path.join(aux_class_path, i)
                 for i in os.listdir(aux_class_path)
             ]
             aux_class = os.path.normpath(aux_class_path).split('/')[-1]

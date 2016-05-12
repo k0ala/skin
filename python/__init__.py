@@ -1,7 +1,6 @@
 """Import skin modules
 """
 
-import skin.python.analysis
-import skin.python.inference
+import skin.python.util
 from skin.python.convnet import ConvNet
 from skin.python.dataset import DataSet

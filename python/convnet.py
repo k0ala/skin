@@ -6,13 +6,12 @@ import json
 import skin
 import skimage.io
 import scipy.misc
-from matplotlib import pyplot
 
 from inception import inception_model
 
 
 IMAGENET_CKPT = '/home/kuprel/skin/graphs/inception-v3/model.ckpt-157585'
-SKIN_CKPT = '/home/kuprel/skin/nets/brettnet42/checkpoints/SAVE.ckpt-7000'
+# SKIN_CKPT = '/home/kuprel/skin/nets/brettnet47/checkpoints/SAVE.ckpt-15000'
 
 
 class ConvNet(object):
@@ -23,9 +22,6 @@ class ConvNet(object):
         self.name = path.split('/')[-1]
         if os.path.exists(self.path):
             self.restore()
-            if hypes:
-                self.hypes = hypes
-                self.save()
         else:
             os.makedirs(self.path)
             os.makedirs(self.path + '/checkpoints')
@@ -48,19 +44,32 @@ class ConvNet(object):
         """Restore net
         """
 
-        with open(self.path+'/hypes.txt') as f: self.hypes = json.load(f)
-        with open(self.path+'/labels.txt') as f: self.labels = json.load(f)
-        self.ckpt = tf.train.get_checkpoint_state(self.path+'/checkpoints')
+        with open(self.path+'/hypes.txt') as f:
+            self.hypes = json.load(f)
+        with open(self.path+'/labels.txt') as f:
+            self.labels = json.load(f)
+        self.ckpt = tf.train.get_checkpoint_state(
+            self.path+'/checkpoints')
 
         if self.ckpt:
             ckpt_path = self.ckpt.model_checkpoint_path
             print('found checkpoint: {}'.format(ckpt_path))
 
 
-    def load_deploy_graph(self, step=1e9):
+    def update_hypes(self):
+        """Update hyperparameters, allows for tuning while training"""
+        hypes_old = self.hypes
+        with open(self.path+'/hypes.txt') as f:
+            self.hypes = json.load(f)
+        for i in hypes_old:
+            if hypes_old[i] != self.hypes[i]:
+                print i, 'changed from', hypes_old[i], 'to', self.hypes[i]
+
+
+    def load_deploy_graph(self, step=1e9, graph_path=None):
 
         steps = np.sort([
-            int(i.split('.')[0].split('step')[-1]) 
+            int(i.split('.')[0].split('step')[-1])
             for i in os.listdir(self.path+'/deploy_graphs')
         ])
         step = steps[np.argmin(np.abs(steps-step))]
@@ -115,22 +124,21 @@ class ConvNet(object):
         scipy.misc.imsave('/tmp/sal.png', 1-S.clip(0, 1))
 
 
-    def create_deploy_graph(self, output_name='loss/loss', batch_size=1, 
+    def create_deploy_graph(self, output_name='loss/loss', batch_size=1,
         save_path=None):
 
         filenames, labels = ['f']*10, [0]*10
-        
+
         graph = tf.Graph()
         with graph.as_default():
-            fetches = skin.inference.build_graph(self.hypes, filenames, 
-                labels, len(self.labels), subset='val', batch_size=batch_size)
+            fetches = self.build_graph(filenames, labels, 'val')
 
             restore_vars = tf.train.ExponentialMovingAverage(0.9)
             restore_vars = restore_vars.variables_to_restore()
             restorer = tf.train.Saver(restore_vars)
 
         steps = np.sort([
-            int(i.split('-')[-1]) 
+            int(i.split('-')[-1])
             for i in os.listdir(self.path+'/checkpoints')
             if 'save.ckpt' in i and '.meta' not in i
             and 'tempstate' not in i
@@ -139,7 +147,6 @@ class ConvNet(object):
 
         print 'Creating deploy graph for step', step
 
-        var2const = tf.python.client.graph_util.convert_variables_to_constants
         coord = tf.train.Coordinator()
 
         with tf.Session(graph=graph) as sess:
@@ -149,7 +156,9 @@ class ConvNet(object):
 
             ckpt_path = self.path+'/checkpoints/save.ckpt-'+str(step)
             restorer.restore(sess, ckpt_path)
-            deploy_graph_def = var2const(
+
+            v2c = tf.python.client.graph_util.convert_variables_to_constants
+            deploy_graph_def = v2c(
                 sess, graph.as_graph_def(), [output_name])
             if not os.path.exists(self.path+'/deploy_graphs'):
                 os.makedirs(self.path+'/deploy_graphs')
@@ -161,7 +170,28 @@ class ConvNet(object):
         del graph, sess
 
 
-    def validate(self, data, gpu, gpu_fraction):
+    def forward(self, filenames, output_name='logits', gpu=None, batch_size=1,
+        step=None):
+
+        dev = '/cpu:0'
+        if gpu: dev = '/gpu:%d'%gpu
+
+        with tf.device(dev):
+            graph, step = self.load_deploy_graph(step=step)
+
+        z = graph.get_tensor_by_name(output_name+':0')
+        z = tf.squeeze(z)
+
+        with tf.Session(graph=graph) as sess:
+
+            outputs = np.array([
+                z.eval({'inputs/batch:0': [i]})
+                for i in filenames
+            ])
+
+        return outputs
+
+    def validate(self, data, gpu=0, gpu_fraction=0.8):
         """Validate net
 
         Args:
@@ -172,7 +202,7 @@ class ConvNet(object):
         config = tf.GPUOptions(per_process_gpu_memory_fraction=gpu_fraction)
         config = tf.ConfigProto(gpu_options=config)
 
-        with tf.device('/gpu:%d'%gpu): 
+        with tf.device('/gpu:%d'%gpu):
             graph, step = self.load_deploy_graph()
 
         l = graph.get_tensor_by_name('loss/loss:0')
@@ -200,26 +230,30 @@ class ConvNet(object):
 
                 if i % 100 == 0:
                     print ', '.join([
-                        'Evaluated %d of %d images',
-                        'Train Step: %d',
-                        'Loss: %.2f'
-                    ]) % (i, len(data), step, np.mean(loss))
+                        'Evaluated %d of %d images' % (i, len(data)),
+                        'Train Step: %d' % step,
+                        'Loss: %.2f' % np.mean(loss)
+                    ])
                     loss = []
 
-            logits = np.array(logits, dtype='float16')
-            labels = np.array(labels, dtype='int32')
+        skin.util.make_plots(logits, labels, self.labels,
+            os.path.join(self.path, 'plots', 'val', step))
 
-            self._save_matrix(logits, 'logits', 'validation', step)
-            self.make_plots(logits, labels, 'validation', step)
+        return logits
 
 
-    def train(self, data, gpu, gpu_fraction, max_epochs=1e9):
+    def train(self, data, gpu=0, gpu_fraction=0.8, max_epochs=1e9):
         """Train net
-        
+
         Args:
             data (list): Dataset as list of tuples [(filename, label string)]
             gpu_fraction (float): Fraction of GPU memory to use
         """
+
+        feed_hypes = [
+            'learning_rate', 'epsilon', 'beta1', 'beta2',
+            'loc_net_reg', 'xform_reg', 'variable_averages_decay'
+        ]
 
         subset = 'train'
         batch_size = self.hypes['batch_size']
@@ -227,12 +261,13 @@ class ConvNet(object):
         filenames = [x for x, y in data]
         labels = [self.labels.index(y) for x, y in data]
 
-        logits_matrix, logits_info = self._init_logits(filenames, labels, subset)
+        logits_matrix, logits_info = skin.util.init_logits(
+            self.path, filenames, labels, subset)
 
         graph = tf.Graph()
         with graph.as_default(), tf.device('/gpu:%d'%gpu):
-            fetches = skin.inference.build_graph(self.hypes, filenames, 
-                labels, len(self.labels), subset, batch_size)
+            fetches = self.build_graph(
+                filenames, labels, subset, feed_hypes)
 
             savers = {
                 'short': tf.train.Saver(max_to_keep=3, name='save_short'),
@@ -249,27 +284,20 @@ class ConvNet(object):
 
         with tf.Session(config=config, graph=graph) as sess:
 
-            tf.initialize_all_variables().run()
+            feed = {i+':0': self.hypes[i] for i in feed_hypes}
+            tf.initialize_all_variables().run(feed)
 
             if getattr(self, 'ckpt', None):
                 ckpt_path = self.ckpt.model_checkpoint_path
                 savers['short'].restore(sess, ckpt_path)
             else:
+                ckpt_path = IMAGENET_CKPT
+                restore_vars = tf.get_collection('_variables_to_restore_')
                 if self.hypes['spatial_transformer']:
-                    ckpt_path = SKIN_CKPT
                     restore_vars = [
-                        i for i in tf.all_variables()
-                        if 'spatial_transform' not in i.name
+                        i for i in restore_vars
+                        if 'loc_net' not in i.name
                     ]
-                    # restore_vars = {}
-                    # for i in tf.all_variables():
-                    #     name = i.op.name
-                    #     if 'spatial_transform' in name:
-                    #         name = '/'.join(name.split('/')[1:])
-                    #     restore_vars[name] = i
-                else:
-                    ckpt_path = IMAGENET_CKPT
-                    restore_vars = tf.get_collection('_variables_to_restore_')
 
                 restorer = tf.train.Saver(restore_vars)
                 restorer.restore(sess, ckpt_path)
@@ -285,8 +313,11 @@ class ConvNet(object):
 
                     t = time.time()
 
+                    self.update_hypes()
+                    feed = {i+':0': self.hypes[i] for i in feed_hypes}
+
                     fetch_names = sorted(fetches.keys())
-                    fetched = sess.run([fetches[i] for i in fetch_names])
+                    fetched = sess.run([fetches[i] for i in fetch_names], feed)
                     fetched = dict(zip(fetch_names, fetched))
 
                     dt = time.time()-t
@@ -294,7 +325,7 @@ class ConvNet(object):
                     step = fetched['global_step']
 
                     I = [
-                        logits_info['filenames'].index(i) 
+                        logits_info['filenames'].index(i)
                         for i in fetched['filenames']
                     ]
                     logits_matrix[I] = fetched['logits']
@@ -305,32 +336,34 @@ class ConvNet(object):
                         'Step: %d' % step,
                         'Epochs: %.3f' % num_epochs,
                         'CrossEntropy: %.2f' % fetched['loss'],
-                        'WeightNorm: %.2f' % fetched['reg_loss'],
+                        'RegLoss: %.2f' % fetched['reg_loss'],
                         'FPS: %.1f' % (batch_size/dt)
                     ])
 
-                    if step%100 == 0:
+                    if step%5 == 0:
 
                         print('saving')
 
                         savers['short'].save(
-                            sess = sess, 
+                            sess = sess,
                             save_path = self.path+'/checkpoints/save.ckpt',
                             global_step = fetches['global_step']
                         )
 
-                        writer.add_summary(summary_op.eval(), step)
+                        writer.add_summary(summary_op.eval(feed), step)
 
-                        self._save_matrix(logits_matrix, 'logits', subset, step)
-                        self.make_plots(logits_matrix, logits_info['labels'],
-                            subset, step)
+                        skin.util.save_matrix(self.path, logits_matrix,
+                            'logits', subset, step)
+                        skin.util.make_plots(
+                            logits_matrix, logits_info['labels'], self.labels,
+                            os.path.join(self.path, 'plots', subset, step))
 
-                    if step%1000 == 0:
+                    if step%10 == 0:
 
                         self.create_deploy_graph()
 
                         savers['long'].save(
-                            sess = sess, 
+                            sess = sess,
                             save_path = self.path+'/checkpoints/SAVE.ckpt',
                             global_step = fetches['global_step']
                         )
@@ -340,73 +373,152 @@ class ConvNet(object):
         coord.join(threads)
 
 
-    def make_plots(self, logits, labels, subset, step, confidence_interval=0.8):
-        """Make analysis plots and save to disk
+    def build_graph(self, filenames, labels, subset, feed_hypes=None):
 
-        Args:
-            subset (string): Either `train` or `val`
-            step (int): Training iteration to analyze
-            confidence_interval (float): Confidence interval [0,1] of
-                uncertainty ellipses. If `None`, no ellipses are plotted
-        """
+        hypes = self.hypes.copy()
 
-        def _save_fig(fig, category, fig_type):
-            fig_path = os.path.join(self.path, 'plots', subset, category, fig_type)
-            if not os.path.exists(fig_path): os.makedirs(fig_path)
-            fig.savefig(fig_path + '/step{}.svg'.format(step))
+        if feed_hypes:
+            with tf.name_scope(None):
+                for i in feed_hypes:
+                    hypes[i] = tf.placeholder('float32', name=i)
+                    hypes[i].set_shape([])
 
-        with open('../data/competition.txt') as f:
-            competition_data = json.load(f)
+        with tf.name_scope('inputs'):
 
-        b = np.logical_not(np.isnan(logits.sum(1)))
-        Y, Z = np.array(labels)[b], logits[b].astype('float32')
+            filenames, labels = tf.train.slice_input_producer(
+                tensor_list = [filenames, labels],
+                capacity = hypes['batch_size']*2,
+                shuffle = (subset=='train')
+            )
 
-        for category in ['pigmented', 'epidermal']:
+            filenames, labels = tf.train.batch(
+                tensor_list = [filenames, labels],
+                capacity = hypes['batch_size']*2,
+                batch_size = hypes['batch_size']
+            )
 
-            i = self.labels.index('{} benign'.format(category))
-            j = self.labels.index('{} malignant'.format(category))
+            images0 = [
+                tf.image.decode_jpeg(tf.read_file(i[0]), channels=3)
+                for i in tf.split(0, hypes['batch_size'], filenames)
+            ]
 
-            if category not in competition_data: competition_data[category] = None
+            images0 = [skin.util.square_pad(i) for i in images0]
 
-            IJ = np.logical_or(Y==i, Y==j)
-            y = Y[IJ].copy()
-            y[y==i] = 0
-            y[y==j] = 1
+            if subset == 'train':
+                images0 = [tf.image.random_flip_left_right(i) for i in images0]
+                images0 = [tf.image.random_flip_up_down(i) for i in images0]
 
-            p = np.exp(Z[IJ][:,[i,j]])
-            p = p[:,1]/p.sum(axis=1)
+            if hypes['spatial_transformer']:
+                images = skin.util.spatial_tranform(
+                    images0, hypes['batch_size'], subset,
+                    hypes['loc_net'], hypes['xform_reg'])
+            else:
+                images = tf.pack([
+                    tf.image.resize_images(i, 299, 299)
+                    for i in images0
+                ])
 
-            hist_fig = skin.analysis.get_hist(p, y)
-            _save_fig(hist_fig, category, 'hist')
+            with tf.name_scope(None):
+                images = tf.identity(images, name='input')
 
-            roc_fig = skin.analysis.get_roc(p, y, competition_data[category], confidence_interval)
-            _save_fig(roc_fig, category, 'roc')
+        logits, logits_aux = inception_model.inference(
+            images = (images-128)/128.,
+            num_classes = len(self.labels),
+            for_training = (subset == 'train'),
+            restore_logits = (subset != 'train')
+        )
 
-            pyplot.close('all')
+        with tf.name_scope(None):
+            logits = tf.identity(logits, name='logits')
+        tf.histogram_summary('logits', logits)
 
-            
-    def _init_logits(self, filenames, labels, subset):
+        with tf.name_scope('loss'):
 
-        logits_info = {i: j for i, j in zip(filenames, labels)}
-        logits_info = {
-            'filenames': logits_info.keys(), 
-            'labels': logits_info.values()
+            batch_size, num_classes = logits.get_shape().as_list()
+
+            labels_sparse = tf.sparse_to_dense(
+                sparse_indices = tf.transpose(
+                    tf.pack([tf.range(batch_size), labels])
+                ),
+                output_shape = [batch_size, num_classes],
+                sparse_values = np.ones(batch_size, dtype='float32')
+            )
+
+            loss = tf.nn.softmax_cross_entropy_with_logits(logits, labels_sparse)
+            loss = tf.reduce_mean(loss, name='loss')
+
+            loss_aux = tf.nn.softmax_cross_entropy_with_logits(
+                logits_aux, labels_sparse)
+            loss_aux = tf.reduce_mean(loss_aux, name='loss_aux')
+
+            loss = 0.7*loss + 0.3*loss_aux
+
+            tf.scalar_summary('loss', loss)
+
+        fetches = {
+            'loss': loss,
+            'filenames': filenames,
+            'logits': logits
         }
 
-        logits_matrix = np.zeros(
-            shape = [len(logits_info['filenames']), len(self.labels)],
-            dtype = 'float16'
-        )
-        logits_matrix[:] = np.nan
+        def print_graph_ops():
+            with open('/tmp/graph_ops.txt', 'w') as f:
+                for op in tf.get_default_graph().get_operations():
+                    f.write(op.type.ljust(35)+'\t'+op.name+'\n')
 
-        with open(self.path + '/logits_info_{}.txt'.format(subset), 'w') as f:
-            json.dump(logits_info, f, indent=4)
+        if subset == 'train':
 
-        return logits_matrix, logits_info
+            reg_losses = tf.get_collection('regularization_losses')
 
+            for i, j in enumerate(reg_losses):
+                if 'loc_net' in j.name:
+                    reg_losses[i] *= hypes['loc_net_reg']
 
-    def _save_matrix(self, A, name, subset, step):
+            reg_loss = tf.add_n(reg_losses)
+            tf.scalar_summary('reg_loss', reg_loss)
 
-        path = os.path.join(self.path, name, subset)
-        if not os.path.exists(path): os.makedirs(path)
-        np.save(path+'/step{}.npy'.format(step), A)
+            with tf.variable_scope('reg_loss'):
+                loss += reg_loss
+
+            print_graph_ops()
+
+            global_step = tf.Variable(0, name='global_step', trainable=False)
+
+            opt = eval('tf.train.{}Optimizer'.format('Adam'))(
+                learning_rate = hypes['learning_rate'],
+                epsilon = hypes['epsilon'],
+                beta1 = hypes['beta1'],
+                beta2 = hypes['beta2']
+            )
+
+            grads = opt.compute_gradients(loss)
+            apply_grads = opt.apply_gradients(grads, global_step)
+
+            variable_averages = tf.train.ExponentialMovingAverage(
+                hypes['variable_averages_decay'], global_step)
+            variables_to_average = (tf.trainable_variables() +
+                                    tf.moving_average_variables())
+            variables_averages_op = variable_averages.apply(variables_to_average)
+
+            batchnorm_updates_op = tf.group(*tf.get_collection('_update_ops_'))
+
+            train_op = tf.group(apply_grads, variables_averages_op, batchnorm_updates_op)
+
+            for grad, var in grads:
+                tf.histogram_summary(var.op.name, var)
+                try:
+                    tf.histogram_summary(var.op.name + '/gradients', grad)
+                except:
+                    print var.op.name
+
+            fetches.update({
+                'reg_loss': reg_loss,
+                'train_op': train_op,
+                'global_step': global_step
+            })
+
+        else:
+
+            print_graph_ops()
+
+        return fetches
